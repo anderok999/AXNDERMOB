@@ -7,50 +7,29 @@ class AxnderEngine:
         self.found_devices = []
 
     def _purge(self):
-        """Limpia procesos para evitar bloqueos en la red de Android."""
+        """Limpia procesos para evitar bloqueos en la memoria de Android."""
         try:
-            os.system('pkill -f nanodlna > /dev/null 2>&1')
-            time.sleep(0.5)
+            subprocess.run(['pkill', '-f', 'nanodlna'], capture_output=True)
         except:
             pass
 
     def scan_network(self):
+        """Escaneo profundo. Nota: Requiere GPS activado en el móvil."""
         from nanodlna import devices
-        print("\033[92m[*] RASTREANDO NODOS (RNIBO AGRESSIVE SCANN)...\033[0m")
-        
-        # Escaneo de 12 segundos para dar tiempo a las TVs lentas
-        raw_devs = devices.get_devices(timeout=12)
-        self.found_devices = []
-
-        for d in raw_devs:
-            # Extraemos datos básicos del objeto o diccionario
-            name = getattr(d, 'friendly_name', 'Smart TV')
-            loc = getattr(d, 'location', '')
-            ip = getattr(d, 'ip', '0.0.0.0')
-
-            # REPARACIÓN DE IP: Si la IP es 0.0.0.0, la sacamos del URL de 'location'
-            if (ip == '0.0.0.0' or ip == '') and '//' in loc:
-                try:
-                    ip = loc.split('//')[1].split(':')[0]
-                except:
-                    ip = "Unknown"
-
-            self.found_devices.append({
-                'friendly_name': name,
-                'location': loc,
-                'ip': ip
-            })
-        
+        print("\033[93m[*] RASTREANDO NODOS EN RED LOCAL...\033[0m")
+        # Aumentamos a 12 segundos porque el Wi-Fi móvil es más inestable
+        self.found_devices = devices.get_devices(timeout=12)
         return self.found_devices
 
     def inject_direct(self, device_index, target_file):
+        """Inyecta media directamente al nodo seleccionado."""
         try:
             target = self.found_devices[device_index]
-            loc = target['location']
+            location = getattr(target, 'location', '')
             self._purge()
             
-            # --no-stdin es vital para que Termux no se cuelgue
-            cmd = f'nanodlna play "{target_file}" --device "{loc}" --no-stdin'
+            # Ejecución limpia para Termux
+            cmd = f'nanodlna play "{target_file}" --device "{location}"'
             subprocess.Popen(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             return True
         except Exception as e:
@@ -58,20 +37,25 @@ class AxnderEngine:
             return False
 
     def inject_sequence(self, device_index, target_file):
+        """Inyecta Intro de seguridad + Payload final."""
         target = self.found_devices[device_index]
-        loc = target['location']
-        self._purge()
+        location = getattr(target, 'location', '')
+        intro = "intro_axnder.mp4"
         
-        # Fase 1: Intro
-        subprocess.Popen(f'nanodlna play "intro_axnder.mp4" --device "{loc}" --no-stdin', shell=True)
-        time.sleep(7)
+        if not os.path.exists(intro):
+            print(f"[-] No se encontró {intro}, saltando a payload...")
+            return self.inject_direct(device_index, target_file)
+
         self._purge()
-        # Fase 2: Payload
-        subprocess.Popen(f'nanodlna play "{target_file}" --device "{loc}" --no-stdin', shell=True)
+        subprocess.Popen(f'nanodlna play "{intro}" --device "{location}"', shell=True)
+        time.sleep(7) # Duración de la intro
+        self._purge()
+        subprocess.Popen(f'nanodlna play "{target_file}" --device "{location}"', shell=True)
         return True
 
     def stop_all(self, device_index):
+        """Corta la comunicación con el nodo."""
         target = self.found_devices[device_index]
-        loc = target['location']
-        subprocess.run(f'nanodlna stop --device "{loc}"', shell=True)
+        location = getattr(target, 'location', '')
+        subprocess.run(f'nanodlna stop --device "{location}"', shell=True)
         self._purge()
